@@ -4,24 +4,188 @@ package UDDI;
 
 use strict;
 
-our $VERSION = "0.01";
+our $VERSION = "0.02";
 
-our $registry = "http://test.uddi.microsoft.com/inquire";
+our $registry ||= "http://test.uddi.microsoft.com/inquire";
 #our $registry = "http://uddi.microsoft.com/inquire";
 our $TRACE;
+our $err;
+
+require Exporter;
+our @EXPORT_OK = qw(find_binding find_business find_service find_tModel
+		    get_bindingDetail get_businessDetail get_businessDetailExt
+		    get_serviceDetail get_tModelDetail
+                   );
+
+my %findQualifier = map {$_ => 1}
+   qw(exactNameMatch caseSensitiveMatch
+      sortByNameAsc sortByNameDesc
+      sortByDateAsc sortByDateDesc
+     );
+
+sub _esc_q {
+    for (@_) {
+	s/&/&amp;/g;
+	s/\"/&quot;/g;
+	s/</&lt;/g;
+    }
+}
+
+sub _esc {
+    for (@_) {
+	s/&/&amp;/g;
+	s/</&lt;/g;
+    }
+}
+
+sub _rows_and_fq
+{
+    my $arg = shift;
+    my $msg = "";
+    if (defined(my $maxRows = delete $arg->{maxRows})) {
+	$msg .= qq( maxRows="$maxRows");
+    }
+    $msg .= qq( xmlns="urn:uddi-org:api">);
+    if (my $findQ = delete $arg->{findQualifiers}) {
+	unless (ref($findQ)) {
+	    $findQ = [split(' ', $findQ)];
+	}
+	if ($^W) {
+	    for (@$findQ) {
+		warn "Unknown findQualifier '$_'\n" unless $findQualifier{$_};
+	    }
+	}
+	$msg .= "<findQualifiers>" .
+                   join("", map "<findQualifier>$_</findQualifier>", @$findQ) .
+                "</findQualifiers>";
+    }
+    return $msg;
+}
+
+sub _tbag
+{
+    my $arg = shift;
+    my $msg = "";
+    if (my $tBag = delete $arg->{tModelBag}) {
+	unless (ref($tBag)) {
+	    $tBag = [split(' ', $tBag)];
+	}
+	$msg .= "<tModelBag>" .
+                   join("", map "<tModelKey>$_</tModelKey>", @$tBag) .
+                "</tModelBag>";
+    }
+    return $msg;
+}
+
+sub _key_ref
+{
+    my($arg, $bag) = @_;
+    my $msg = "";
+    if (my $refs = delete $arg->{$bag}) {
+	# XXX using a hash to implement a keyedReference bag is problematic
+	# because there is no obvous place to put tModelKey if wanted...
+	if (ref($refs) eq "HASH") {
+	    my @kref;
+	    for my $k (sort keys %$refs) {
+		my $v = $refs->{$k};
+		for ($k, $v) {
+		    _esc_q($_);
+		}
+		push(@kref, qq(<keyedReference keyName="$k" keyValue="$v"/>));
+	    }
+	    $msg = "<$bag>" . join("", @kref) . "</$bag>";
+	}
+	else {
+	    die "Unknown $bag argument type(must be hash)";
+	}
+    }
+    $msg;
+}
+
+sub find_binding
+{
+    my %arg = @_;
+    my $serviceKey = delete $arg{serviceKey};
+    die "Missing serviceKey" unless $serviceKey;
+    my $msg = qq(<find_binding serviceKey="$serviceKey" generic="1.0");
+    $msg .= _rows_and_fq(\%arg);
+    $msg .= _tbag(\%arg);
+    $msg .= qq(</find_binding>);
+    if (%arg) {
+	my $a = join(", ", keys %arg);
+	warn "Unrecongized parameters: $a";
+    }
+
+    return _request($msg);
+}
 
 sub find_business
 {
     my %arg = @_;
     my $msg = qq(<find_business generic="1.0");
-    if (my $max_rows = delete $arg{max_rows}) {
-	$msg .= qq( maxRows="$max_rows");
-    }
-    $msg .= qq( xmlns="urn:uddi-org:api">);
+    $msg .= _rows_and_fq(\%arg);
+
     if (my $n = delete $arg{name}) {
+	_esc($n);
 	$msg .= qq(<name>$n</name>);
     }
+    $msg .= _key_ref(\%arg, "identifierBag");
+    $msg .= _key_ref(\%arg, "categoryBag");
+    $msg .= _tbag(\%arg);
+
+    if (my $discU = delete $arg{discoveryURLs}) {
+	unless (ref($discU)) {
+	    $discU = [split(' ', $discU)];
+	}
+	$msg .= "<discoveryURLs>" .
+                   join("", map "<discoveryURL>$_</discoveryURL>", @$discU) .
+                "</discoveryURLs>";
+    }
+
     $msg .= qq(</find_business>);
+    if (%arg) {
+	my $a = join(", ", keys %arg);
+	warn "Unrecongized parameters: $a";
+    }
+
+    return _request($msg);
+}
+
+sub find_service
+{
+    my %arg = @_;
+    my $businessKey = delete $arg{businessKey};
+    die "Missing businessKey" unless $businessKey;
+    my $msg = qq(<find_service businessKey="$businessKey" generic="1.0");
+    $msg .= _rows_and_fq(\%arg);
+    if (my $n = delete $arg{name}) {
+	_esc($n);
+	$msg .= qq(<name>$n</name>);
+    }
+    $msg .= _key_ref(\%arg, "categoryBag");
+    $msg .= _tbag(\%arg);
+    $msg .= qq(</find_binding>);
+    if (%arg) {
+	my $a = join(", ", keys %arg);
+	warn "Unrecongized parameters: $a";
+    }
+
+    return _request($msg);
+}
+
+sub find_tModel
+{
+    my %arg = @_;
+    my $msg = qq(<find_tModel generic="1.0");
+    $msg .= _rows_and_fq(\%arg);
+    if (my $n = delete $arg{name}) {
+	_esc($n);
+	$msg .= qq(<name>$n</name>);
+    }
+    $msg .= _key_ref(\%arg, "identifierBag");
+    $msg .= _key_ref(\%arg, "categoryBag");
+    $msg .= _tbag(\%arg);
+    $msg .= qq(</find_tModel>);
     if (%arg) {
 	my $a = join(", ", keys %arg);
 	warn "Unrecongized parameters: $a";
@@ -96,17 +260,18 @@ my $ua;
 sub _request {
     my $msg = shift;
 
-    require LWP::UserAgent;
-    $ua ||= LWP::UserAgent->new;
+    if (!$ua) {
+	require LWP::UserAgent;
+	$ua = LWP::UserAgent->new;
+	$ua->agent("UDDI.pm/$VERSION " . $ua->agent);
+	$ua->env_proxy;
+    }
 
     my $req = HTTP::Request->new(POST => $registry);
-    $req->date(time);
+    $req->date(time) if $TRACE;
     $req->header("SOAPAction", '""');
     $req->content_type("text/xml");
-    $req->content(<<"EOT");
-<?xml version="1.0" encoding="UTF-8"?>
-<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/"><Body>$msg</Body></Envelope>
-EOT
+    $req->content(qq(<?xml version="1.0" encoding="UTF-8"?><Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/"><Body>$msg</Body></Envelope>\n));
 
     print $TRACE "\n\n", ("=" x 50), "\n", $req->as_string if $TRACE;
 
@@ -257,13 +422,7 @@ sub as_string
 
     unless ($class) {
 	# plain string
-	if ($elem) {
-	    # quote
-	    for ($self) {
-		s/&/&amp;/g;
-		s/</&lt;/g;
-	    }
-	}
+	UDDI::_esc($self) if $elem;
 	return $self;
     }
 
@@ -280,11 +439,7 @@ sub as_string
 	for my $k (sort keys %$attr) {
 	    my $v = $attr->{$k};
 	    $k =~ s/^[^\0]*\0//; # kill namespace qualifier
-	    for ($v) {
-		s/&/&amp;/g;
-	        s/\"/&quot;/g;
-		s/</&lt;/g;
-	    }
+	    UDDI::_esc_q($v);
 	    @attr = qq($k="$v");
 	}
 	$attr = join(" ", "", @attr);
@@ -299,3 +454,76 @@ sub as_string
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+UDDI - UDDI client interface
+
+=head1 SYNOPSIS
+
+ use UDDI;
+
+ my $list = UDDI::find_business(name => "a");
+ my $bis = $list->businessInfos;
+ for my $b ($bis->businessInfo) {
+     print $b->name, "\n";
+ }
+
+=head1 DESCRIPTION
+
+This module provide functions to interact with UDDI registry servers.
+UDDI (I<Universal Description, Discovery and Integration>) is the name
+of a group of web-based registries that expose information about
+businesses and their technical interfaces (APIs).  Learn more about
+UDDI at I<www.uddi.org>.
+
+The interface exposed comply with the "UDDI Programmer's API
+Specification". Currently only the UDDI inquiry interface is provided.
+
+The following functions are provided.  None of them are exported by
+default.
+
+=over
+
+=item find_binding( serviceKey => $key, ... )
+
+=item find_business( ... )
+
+=item find_service( businessKey => $key, ... )
+
+=item find_tModel( ... )
+
+=item get_bindingDetail( $bindingKey, ... )
+
+=item get_businessDetail( $businessKey, ... )
+
+=item get_businessDetailExt( $businessKey, ... )
+
+=item get_serviceDetail( $serviceKey, ... )
+
+=item get_tModelDetail( $tModelKey, ... )
+
+=back
+
+The $UDDI::registry variable contains the URL to the registry server
+to use for the calls.  Currently it defaults to Microsoft's test
+server.  For debugging you might assign a file handle to the
+$UDDI::TRACE variable.  Trace logs of the SOAP messages are then
+written to this file.
+
+=head1 SEE ALSO
+
+http://www.uddi.org, L<SOAP>, L<SOAP::Lite>
+
+=head1 AUTHOR
+
+Gisle Aas <gisle@ActiveState.com>
+
+Copyright 2000 ActiveState Tool Corp.
+
+This library is free software; you can redistribute it and/or
+modify it under the same terms as Perl itself.
+
+=cut
