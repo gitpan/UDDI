@@ -7,12 +7,13 @@ use strict;
 sub SOAP_ENV () { "http://schemas.xmlsoap.org/soap/envelope/" }
 sub UDDI_API () { "urn:uddi-org:api" }
 
-for (qw(Envelope Header Body Fault)) {
+for (qw(Envelope Header Body Fault detail)) {
     $UDDI::elementContent{"UDDI::SOAP::$_"} = UDDI::ELEM_CONTENT();
 }
 
-my %no_char_content = map { +"UDDI::SOAP::$_" => 1 }
-                          qw(Envelope Header Body Fault);
+for (qw(faultcode faultstring faultactor)) {
+    $UDDI::elementContent{"UDDI::SOAP::$_"} = UDDI::TEXT_CONTENT();
+}
 
 sub parse {
     my $doc = shift;
@@ -219,6 +220,55 @@ sub body_content
     else {
 	return $body->[1];
     }
+}
+
+
+package UDDI::SOAP::Fault;
+
+sub code
+{
+    my $self = shift;
+    my $code;
+    for (@$self) {
+	if (ref($_) eq "UDDI::SOAP::detail") {
+	    my $d = $_->[-1];
+	    if (ref($d) eq "UDDI::dispositionReport") {
+		eval {
+		    # hope for the best
+		    $code = $d->result->errInfo->errCode;
+		};
+	    }
+	    last;
+	}
+    }
+
+    if (!$code) {
+	for (@$self) {
+	    if (ref($_) eq "UDDI::SOAP::faultcode") {
+		$code = $_->[-1];
+		last;
+	    }
+	}
+    }
+
+    $code ||= "SOAP_Fault";
+
+    $code;
+}
+
+sub message
+{
+    my $self = shift;
+    my $mess;
+    for (@$self) {
+	if (ref($_) eq "UDDI::SOAP::faultstring") {
+	    $mess = $_->[-1];
+	    last;
+	}
+    }
+
+    $mess ||= $self->code . " fault";
+    $mess;
 }
 
 1;

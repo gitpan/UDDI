@@ -4,12 +4,12 @@ package UDDI;
 
 use strict;
 
-our $VERSION = "0.02";
+our $VERSION = "0.03";
 
 our $registry ||= "http://test.uddi.microsoft.com/inquire";
 #our $registry = "http://uddi.microsoft.com/inquire";
 our $TRACE;
-our $err;
+our %err;
 
 require Exporter;
 our @EXPORT_OK = qw(find_binding find_business find_service find_tModel
@@ -267,6 +267,8 @@ sub _request {
 	$ua->env_proxy;
     }
 
+    undef(%UDDI::err);
+
     my $req = HTTP::Request->new(POST => $registry);
     $req->date(time) if $TRACE;
     $req->header("SOAPAction", '""');
@@ -284,17 +286,37 @@ sub _request {
 
 	require UDDI::SOAP;
 	my $envelope = UDDI::SOAP::parse($res->content);
-	die "MustUnderstand" if $envelope->must_understand_headers;
+	if ($envelope->must_understand_headers) {
+	    %UDDI::err = ( type => "SOAP",
+			   code => "MustUnderstand",
+			   message => "UDDI response contained SOAP headers that ".
+			              "the client libarary did not understand",
+			   detail => $envelope,
+			 );
+	    return undef;
+	}
 
 	my $obj = $envelope->body_content;
 
-	die $obj if ref($obj) eq "UDDI::SOAP::Fault";
+	if (ref($obj) eq "UDDI::SOAP::Fault") {
+	    %UDDI::err = ( type    => "SOAP",
+			   code    => $obj->code,
+			   message => $obj->message,
+			   detail  => $obj,
+			 );
+	    return undef;
+	}
 
 	return $obj;
-
     }
 
-    die $res;
+    %UDDI::err = (
+		  type    => "HTTP",
+		  code    => $res->code,
+		  message => $res->status_line,
+		  detail  => $res,
+		 );
+    return undef;
 }
 
 # The following table is auto-generated from:
@@ -431,7 +453,6 @@ sub as_string
 
     (my $tag = $class) =~ s/^UDDI:://;
 
-
     my @e = @$self;
     my $attr = shift @e;
     if (%$attr) {
@@ -482,34 +503,115 @@ UDDI at I<www.uddi.org>.
 The interface exposed comply with the "UDDI Programmer's API
 Specification". Currently only the UDDI inquiry interface is provided.
 
+=head1 FUNCTIONS
+
 The following functions are provided.  None of them are exported by
-default.
+default.  A successful invocation will return some UDDI object.  On
+error C<undef> is returned and the global variable %UDDI::err is set.
+
+All the find_xxx() functions take key/value pairs as arguments.  All
+they get_xxx() functions simply take one or more keys as argument.
 
 =over
 
 =item find_binding( serviceKey => $key, ... )
 
+This function will find binding details for a specific service.  On
+success a UDDI::bindingDetails object is returned.  Optional
+arguments are C<maxRows>, C<findQualifiers> and C<tModelBag>.
+
 =item find_business( ... )
+
+This function will return businesses that fullfil the search criteria
+given.  On success a UDDI::businessList object is returned.  The returned
+businessList might be empty.  Arguments are C<maxRows>,
+C<findQualifiers>, C<name>, C<identiferBag>, C<categoryBag>,
+C<tModelBag> are C<discoveryURLs>.
 
 =item find_service( businessKey => $key, ... )
 
+This function will find services for a specific business.  On success
+a UDDI::serviceList object is returned.  Optional arguments are
+C<maxRows>, C<findQualifiers>, C<name>, C<categoryBag> and
+C<tModelBag>.
+
 =item find_tModel( ... )
+
+This function will return tModels that fullfil the search criteria
+given.  On success a UDDI::tModelList object is returned.  The returned
+tModelList might be empty.  Arguments are C<maxRows>,
+C<findQualifiers>, C<name>, C<identiferBag> and C<categoryBag>.
 
 =item get_bindingDetail( $bindingKey, ... )
 
+This function will return a UDDI::bindingDetail object containing a
+UDDI::bindingTemplate for each binding key given as argument.
+
 =item get_businessDetail( $businessKey, ... )
+
+This function will return a UDDI::businessDetail object containing a
+UDDI::businessEntity for each business key given as argument.
 
 =item get_businessDetailExt( $businessKey, ... )
 
+This function will return a UDDI::businessDetailExt object containing a
+UDDI::businessEntityExt for each business key given as argument.
+
 =item get_serviceDetail( $serviceKey, ... )
+
+This function will return a UDDI::serviceDetail object containing a
+UDDI::businessService for each service key given as argument.
+
 
 =item get_tModelDetail( $tModelKey, ... )
 
+This function will return a UDDI::tModelDetail object containing a
+UDDI::tModel for each tModel key given as argument.
+
 =back
+
+=head1 GLOBALS
+
+=head2 %UDDI::err
+
+In case of errors the functions above will return undef and the
+%UDDI::err hash will be filled with the following values:
+
+=over
+
+=item type
+
+A short string giving the overall type of the failure.  It can be
+either "HTTP" or "SOAP".
+
+=item code
+
+Error code.  For HTTP it is a 3 digit number.  For UDDI failures it is
+some string prefixed with "E_".  For general SOAP failures it is a
+short string like "VersionMismatch", "MustUnderstand", "Client",
+"Server" (defined in section 4.4.1 in the SOAP spec.)
+
+=item message
+
+A short human readable (English) message describing the error.
+
+=item detail
+
+A reference to the corresponing error object.
+
+=back
+
+The hash will be empty after a successful function call.
+
+=head2 $UDDI::registry
 
 The $UDDI::registry variable contains the URL to the registry server
 to use for the calls.  Currently it defaults to Microsoft's test
-server.  For debugging you might assign a file handle to the
+server.
+
+=head2 $UDDI::TRACE
+
+For debugging you might assign a file handle to the
 $UDDI::TRACE variable.  Trace logs of the SOAP messages are then
 written to this file.
 
