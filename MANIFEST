@@ -1,0 +1,8 @@
+Changes
+MANIFEST
+Makefile.PL
+README
+UDDI.pm
+UDDI/SOAP.pm
+parse-schema
+uddi_1.xsd
